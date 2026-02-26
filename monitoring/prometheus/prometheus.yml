@@ -1,0 +1,108 @@
+# Prometheus Configuration for OpenMail
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'openmail-monitor'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - alertmanager:9093
+
+# Rules files
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # FastAPI Backend
+  - job_name: 'openmail-backend'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['backend:8000']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-backend'
+
+  # PostgreSQL (via postgres_exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-postgres'
+
+  # Redis (via redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-redis'
+
+  # Elasticsearch
+  - job_name: 'elasticsearch'
+    static_configs:
+      - targets: ['elasticsearch:9200']
+    metrics_path: '/_prometheus/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-elasticsearch'
+
+  # Postfix (via postfix_exporter)
+  - job_name: 'postfix'
+    static_configs:
+      - targets: ['postfix:9154']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-postfix'
+
+  # Dovecot (via dovecot_exporter)
+  - job_name: 'dovecot'
+    static_configs:
+      - targets: ['dovecot:9166']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-dovecot'
+
+  # Nginx
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:9113']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-nginx'
+
+  # Node Exporter (host metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-host'
+
+  # Celery Workers
+  - job_name: 'celery'
+    static_configs:
+      - targets: ['celery-worker:9808']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'openmail-celery'

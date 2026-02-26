@@ -1,0 +1,7 @@
+# Virtual aliases lookup
+hosts = postgres
+user = openmail
+password = openmail
+dbname = openmail
+
+query = SELECT unnest(forward_to) FROM mailboxes WHERE full_address='%s' AND forward_to IS NOT NULL AND is_active = true

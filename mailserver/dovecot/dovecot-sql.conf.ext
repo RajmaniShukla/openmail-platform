@@ -1,0 +1,32 @@
+# Dovecot SQL Configuration
+driver = pgsql
+connect = host=postgres dbname=openmail user=openmail password=openmail
+
+# Define the password query
+password_query = SELECT \
+    m.full_address AS user, \
+    u.password_hash AS password, \
+    'vmail' AS userdb_uid, \
+    'vmail' AS userdb_gid, \
+    CONCAT('/var/mail/vhosts/', d.name, '/', m.local_part) AS userdb_home, \
+    CONCAT('maildir:/var/mail/vhosts/', d.name, '/', m.local_part) AS userdb_mail \
+  FROM mailboxes m \
+  JOIN users u ON m.user_id = u.id \
+  JOIN domains d ON m.domain_id = d.id \
+  WHERE m.full_address = '%u' \
+    AND m.is_active = true \
+    AND u.is_active = true
+
+# Define the user query
+user_query = SELECT \
+    CONCAT('/var/mail/vhosts/', d.name, '/', m.local_part) AS home, \
+    'vmail' AS uid, \
+    'vmail' AS gid, \
+    CONCAT('*:bytes=', m.quota_bytes) AS quota_rule \
+  FROM mailboxes m \
+  JOIN domains d ON m.domain_id = d.id \
+  WHERE m.full_address = '%u' \
+    AND m.is_active = true
+
+# Iterate through all users for quota warnings, etc.
+iterate_query = SELECT m.full_address AS user FROM mailboxes m WHERE m.is_active = true

@@ -1,0 +1,171 @@
+groups:
+  - name: openmail-alerts
+    rules:
+      # Backend Health
+      - alert: BackendDown
+        expr: up{job="openmail-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenMail Backend is down"
+          description: "The backend API has been unreachable for more than 1 minute."
+
+      - alert: BackendHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="openmail-backend"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency detected"
+          description: "95th percentile latency is above 1 second for 5 minutes."
+
+      - alert: BackendHighErrorRate
+        expr: rate(http_requests_total{job="openmail-backend",status=~"5.."}[5m]) / rate(http_requests_total{job="openmail-backend"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate in backend"
+          description: "More than 5% of requests are failing."
+
+      # Database Health
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database is unreachable."
+
+      - alert: PostgresHighConnections
+        expr: pg_stat_activity_count{state="active"} > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High PostgreSQL connections"
+          description: "More than 100 active PostgreSQL connections."
+
+      - alert: PostgresTooManyDeadTuples
+        expr: pg_stat_user_tables_n_dead_tup > 100000
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL dead tuples"
+          description: "Table {{ $labels.relname }} has {{ $value }} dead tuples."
+
+      # Redis Health
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache is unreachable."
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis is using more than 85% of max memory."
+
+      # Elasticsearch Health
+      - alert: ElasticsearchDown
+        expr: up{job="elasticsearch"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elasticsearch is down"
+          description: "Elasticsearch cluster is unreachable."
+
+      - alert: ElasticsearchYellowStatus
+        expr: elasticsearch_cluster_health_status{color="yellow"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch cluster yellow"
+          description: "Elasticsearch cluster status is yellow."
+
+      - alert: ElasticsearchRedStatus
+        expr: elasticsearch_cluster_health_status{color="red"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elasticsearch cluster red"
+          description: "Elasticsearch cluster status is red."
+
+      # Mail Server Health
+      - alert: PostfixDown
+        expr: up{job="postfix"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postfix SMTP is down"
+          description: "Postfix mail server is unreachable."
+
+      - alert: PostfixQueueHigh
+        expr: postfix_queue_size{queue="active"} > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postfix queue is growing"
+          description: "More than 1000 messages in the active queue."
+
+      - alert: DovecotDown
+        expr: up{job="dovecot"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dovecot IMAP is down"
+          description: "Dovecot IMAP/POP3 server is unreachable."
+
+      # Disk Space
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Less than 10% disk space remaining on root filesystem."
+
+      - alert: MailDiskSpaceLow
+        expr: node_filesystem_avail_bytes{mountpoint="/var/mail"} / node_filesystem_size_bytes{mountpoint="/var/mail"} < 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low mail storage space"
+          description: "Less than 15% disk space remaining for mail storage."
+
+      # Celery Workers
+      - alert: CeleryWorkerDown
+        expr: celery_workers < 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No Celery workers running"
+          description: "All Celery workers are down."
+
+      - alert: CeleryTaskFailures
+        expr: rate(celery_task_failed_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery task failures"
+          description: "High rate of Celery task failures."

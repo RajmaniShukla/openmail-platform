@@ -1,0 +1,92 @@
+# OpenMail Postfix Configuration
+# See /usr/share/postfix/main.cf.dist for full options
+
+# Basic settings
+smtpd_banner = $myhostname ESMTP OpenMail
+biff = no
+append_dot_mydomain = no
+readme_directory = no
+compatibility_level = 3.6
+
+# TLS settings
+smtpd_tls_cert_file = /etc/ssl/mail/fullchain.pem
+smtpd_tls_key_file = /etc/ssl/mail/privkey.pem
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_loglevel = 1
+smtpd_tls_received_header = yes
+smtpd_tls_session_cache_timeout = 3600s
+smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache
+
+smtp_tls_security_level = may
+smtp_tls_loglevel = 1
+smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
+
+# SASL settings
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_security_options = noanonymous, noplaintext
+smtpd_sasl_tls_security_options = noanonymous
+broken_sasl_auth_clients = yes
+
+# Network settings
+myhostname = mail.example.com
+mydomain = example.com
+myorigin = $mydomain
+inet_interfaces = all
+inet_protocols = all
+mydestination = localhost
+mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128 172.16.0.0/12
+
+# Virtual mailbox settings
+virtual_transport = lmtp:unix:private/dovecot-lmtp
+virtual_mailbox_domains = pgsql:/etc/postfix/pgsql-virtual-domains.cf
+virtual_mailbox_maps = pgsql:/etc/postfix/pgsql-virtual-mailboxes.cf
+virtual_alias_maps = pgsql:/etc/postfix/pgsql-virtual-aliases.cf
+
+# Mail size limits
+message_size_limit = 52428800
+mailbox_size_limit = 0
+
+# Queue settings
+maximal_queue_lifetime = 1d
+bounce_queue_lifetime = 1d
+
+# Restrictions
+smtpd_helo_required = yes
+smtpd_helo_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_invalid_helo_hostname,
+    reject_non_fqdn_helo_hostname
+
+smtpd_sender_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_non_fqdn_sender,
+    reject_unknown_sender_domain
+
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination,
+    reject_non_fqdn_recipient,
+    reject_unknown_recipient_domain
+
+smtpd_relay_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination
+
+# DKIM milter
+milter_protocol = 6
+milter_default_action = accept
+smtpd_milters = inet:localhost:8891
+non_smtpd_milters = inet:localhost:8891
+
+# SpamAssassin content filter
+content_filter = spamassassin
+
+# Logging
+maillog_file = /dev/stdout

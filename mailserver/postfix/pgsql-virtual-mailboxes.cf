@@ -1,0 +1,7 @@
+# Virtual mailboxes lookup
+hosts = postgres
+user = openmail
+password = openmail
+dbname = openmail
+
+query = SELECT CONCAT(d.name, '/', m.local_part, '/') FROM mailboxes m JOIN domains d ON m.domain_id = d.id WHERE m.full_address='%s' AND m.is_active = true

@@ -1,0 +1,7 @@
+# Virtual domains lookup
+hosts = postgres
+user = openmail
+password = openmail
+dbname = openmail
+
+query = SELECT name FROM domains WHERE name='%s' AND is_verified = true AND is_active = true

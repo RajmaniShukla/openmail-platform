@@ -1,0 +1,334 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # FRONTEND - Next.js Webmail Client
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: openmail-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+    depends_on:
+      - backend
+    networks:
+      - openmail-network
+
+  # ============================================
+  # BACKEND - FastAPI Application
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openmail-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://openmail:openmail@postgres:5432/openmail
+      - REDIS_URL=redis://redis:6379/0
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - S3_ENDPOINT=minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-super-secret-key-change-in-production}
+      - MAIL_SERVER_HOSTNAME=${MAIL_SERVER_HOSTNAME:-mail.example.com}
+      - POSTFIX_HOST=postfix
+      - SPAMASSASSIN_HOST=spamassassin
+      - DEBUG=false
+    volumes:
+      - ./data/mail:/var/mail/vhosts
+      - ./data/attachments:/app/attachments
+    depends_on:
+      - postgres
+      - redis
+      - elasticsearch
+      - minio
+    networks:
+      - openmail-network
+
+  # ============================================
+  # DATABASE - PostgreSQL
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: openmail-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=openmail
+      - POSTGRES_PASSWORD=openmail
+      - POSTGRES_DB=openmail
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openmail"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - openmail-network
+
+  # ============================================
+  # CACHE - Redis
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: openmail-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - openmail-network
+
+  # ============================================
+  # SEARCH - Elasticsearch
+  # ============================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: openmail-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - openmail-network
+
+  # ============================================
+  # OBJECT STORAGE - MinIO (S3-compatible)
+  # ============================================
+  minio:
+    image: minio/minio:latest
+    container_name: openmail-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - openmail-network
+
+  # ============================================
+  # SMTP SERVER - Postfix
+  # ============================================
+  postfix:
+    build:
+      context: ./mailserver/postfix
+      dockerfile: Dockerfile
+    container_name: openmail-postfix
+    restart: unless-stopped
+    hostname: ${MAIL_SERVER_HOSTNAME:-mail.example.com}
+    ports:
+      - "25:25"      # SMTP
+      - "587:587"    # Submission
+      - "465:465"    # SMTPS
+    environment:
+      - MAIL_DOMAIN=${MAIL_DOMAIN:-example.com}
+      - MAIL_HOSTNAME=${MAIL_SERVER_HOSTNAME:-mail.example.com}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=openmail
+      - POSTGRES_PASSWORD=openmail
+      - POSTGRES_DB=openmail
+    volumes:
+      - ./data/mail:/var/mail/vhosts
+      - ./certs:/etc/ssl/mail:ro
+      - postfix-spool:/var/spool/postfix
+    depends_on:
+      - postgres
+      - spamassassin
+    networks:
+      - openmail-network
+
+  # ============================================
+  # IMAP/POP3 SERVER - Dovecot
+  # ============================================
+  dovecot:
+    build:
+      context: ./mailserver/dovecot
+      dockerfile: Dockerfile
+    container_name: openmail-dovecot
+    restart: unless-stopped
+    ports:
+      - "143:143"    # IMAP
+      - "993:993"    # IMAPS
+      - "110:110"    # POP3
+      - "995:995"    # POP3S
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=openmail
+      - POSTGRES_PASSWORD=openmail
+      - POSTGRES_DB=openmail
+    volumes:
+      - ./data/mail:/var/mail/vhosts
+      - ./certs:/etc/ssl/mail:ro
+    depends_on:
+      - postgres
+    networks:
+      - openmail-network
+
+  # ============================================
+  # SPAM FILTER - SpamAssassin
+  # ============================================
+  spamassassin:
+    image: instantlinux/spamassassin:latest
+    container_name: openmail-spamassassin
+    restart: unless-stopped
+    volumes:
+      - spamassassin-data:/var/lib/spamassassin
+    networks:
+      - openmail-network
+
+  # ============================================
+  # BACKGROUND WORKERS - Celery
+  # ============================================
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openmail-celery-worker
+    restart: unless-stopped
+    command: celery -A app.celery worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://openmail:openmail@postgres:5432/openmail
+      - REDIS_URL=redis://redis:6379/0
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    volumes:
+      - ./data/mail:/var/mail/vhosts
+    depends_on:
+      - postgres
+      - redis
+      - backend
+    networks:
+      - openmail-network
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openmail-celery-beat
+    restart: unless-stopped
+    command: celery -A app.celery beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://openmail:openmail@postgres:5432/openmail
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - celery-worker
+    networks:
+      - openmail-network
+
+  # ============================================
+  # REVERSE PROXY - NGINX
+  # ============================================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: openmail-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./certs:/etc/ssl/certs:ro
+      - ./data/certbot:/var/www/certbot:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - openmail-network
+
+  # ============================================
+  # MONITORING - Prometheus
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: openmail-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - openmail-network
+
+  # ============================================
+  # MONITORING - Grafana
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: openmail-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - openmail-network
+
+# ============================================
+# VOLUMES
+# ============================================
+volumes:
+  postgres-data:
+  redis-data:
+  elasticsearch-data:
+  minio-data:
+  postfix-spool:
+  spamassassin-data:
+  prometheus-data:
+  grafana-data:
+
+# ============================================
+# NETWORKS
+# ============================================
+networks:
+  openmail-network:
+    driver: bridge
