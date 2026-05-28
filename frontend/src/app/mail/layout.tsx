@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthStore } from '@/stores/authStore'
 import { useEmailStore } from '@/stores/emailStore'
 import { folderApi, labelApi, mailboxApi } from '@/lib/api'
+import { useWebSocket } from '@/hooks/useWebSocket'
 import Sidebar from '@/components/mail/Sidebar'
 import Header from '@/components/mail/Header'
 
@@ -16,6 +17,7 @@ export default function MailLayout({
   const router = useRouter()
   const { isAuthenticated, user } = useAuthStore()
   const { setFolders, setLabels, setMailboxes } = useEmailStore()
+  const { requestNotificationPermission } = useWebSocket()
 
   useEffect(() => {
     if (!isAuthenticated) {

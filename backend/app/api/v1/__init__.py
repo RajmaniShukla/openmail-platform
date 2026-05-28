@@ -3,7 +3,7 @@ OpenMail Platform - API v1 Router
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, emails, folders, labels, domains, mailboxes, contacts, filters, webhooks, stats
+from app.api.v1.endpoints import auth, users, emails, folders, labels, domains, mailboxes, contacts, filters, webhooks, stats, attachments
 
 api_router = APIRouter()
 
@@ -19,3 +19,4 @@ api_router.include_router(contacts.router, prefix="/contacts", tags=["Contacts"]
 api_router.include_router(filters.router, prefix="/filters", tags=["Filters"])
 api_router.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 api_router.include_router(stats.router, prefix="/stats", tags=["Statistics"])
+api_router.include_router(attachments.router, prefix="/attachments", tags=["Attachments"])

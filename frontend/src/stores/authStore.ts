@@ -6,9 +6,14 @@ interface User {
   email: string
   first_name?: string
   last_name?: string
+  full_name?: string
   avatar_url?: string
   role: string
-  settings: Record<string, any>
+  settings: Record<string, unknown>
+  // Profile settings (top-level convenience fields mirrored from settings)
+  display_name?: string
+  timezone?: string
+  language?: string
 }
 
 interface AuthState {

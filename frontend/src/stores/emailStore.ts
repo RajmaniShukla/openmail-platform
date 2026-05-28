@@ -3,6 +3,7 @@ import { create } from 'zustand'
 interface Email {
   id: string
   thread_id?: string
+  message_id?: string
   from_address: string
   from_name?: string
   to_addresses: Array<{ address: string; name?: string }>
@@ -17,6 +18,12 @@ interface Email {
   attachment_count: number
   labels: Array<{ id: string; name: string; color: string }>
   folder?: { id: string; name: string; type: string }
+  attachments?: Array<{ id: string; filename: string; content_type: string; size_bytes: number }>
+  security?: {
+    dkim?: string | null
+    spf?: string | null
+    dmarc?: string | null
+  }
 }
 
 interface Folder {
@@ -69,6 +76,8 @@ interface EmailState {
   markAsRead: (ids: string[]) => void
   markAsUnread: (ids: string[]) => void
   toggleStar: (id: string) => void
+  addEmail: (email: Email) => void
+  removeEmail: (id: string) => void
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
@@ -135,4 +144,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         e.id === id ? { ...e, is_starred: !e.is_starred } : e
       ),
     })),
+
+  addEmail: (email) =>
+    set((state) => ({ emails: [email, ...state.emails] })),
+
+  removeEmail: (id) =>
+    set((state) => ({ emails: state.emails.filter((e) => e.id !== id) })),
 }))

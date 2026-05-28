@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { format } from 'date-fns'
 import {
   X,
@@ -12,18 +13,26 @@ import {
   MoreHorizontal,
   Paperclip,
   Download,
-  ExternalLink,
-  Shield,
+  ChevronDown,
+  ChevronUp,
   ShieldCheck,
   ShieldAlert,
 } from 'lucide-react'
 import { useEmailStore } from '@/stores/emailStore'
 import { emailApi, attachmentApi } from '@/lib/api'
+import { useEmailThread } from '@/hooks/useEmailThread'
+import ComposeModal from '@/components/mail/ComposeModal'
 import toast from 'react-hot-toast'
 import { clsx } from 'clsx'
 
 export default function EmailView() {
   const { selectedEmail, setSelectedEmail, toggleStar } = useEmailStore()
+  const [composeMode, setComposeMode] = useState<null | 'reply' | 'replyAll' | 'forward'>(null)
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
+
+  const { data: threadEmails } = useEmailThread(selectedEmail)
+  // If we got thread data use it; otherwise show just the selected email
+  const emails = threadEmails && threadEmails.length > 1 ? threadEmails : (selectedEmail ? [selectedEmail] : [])
 
   if (!selectedEmail) return null
 
@@ -69,156 +78,144 @@ export default function EmailView() {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
+  const toggleCollapse = (id: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
   return (
     <div className="h-full flex flex-col bg-white dark:bg-gray-800">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleClose}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 lg:hidden"
-          >
+          <button onClick={handleClose} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 lg:hidden">
             <X className="w-5 h-5 text-gray-500" />
           </button>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
-            {selectedEmail.subject || '(no subject)'}
-          </h2>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+              {selectedEmail.subject || '(no subject)'}
+            </h2>
+            {emails.length > 1 && (
+              <span className="text-xs text-gray-400">{emails.length} messages in thread</span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-1">
-          <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Reply">
+          <button onClick={() => setComposeMode('reply')} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Reply">
             <Reply className="w-5 h-5 text-gray-500" />
           </button>
-          <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Reply All">
+          <button onClick={() => setComposeMode('replyAll')} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Reply All">
             <ReplyAll className="w-5 h-5 text-gray-500" />
           </button>
-          <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Forward">
+          <button onClick={() => setComposeMode('forward')} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Forward">
             <Forward className="w-5 h-5 text-gray-500" />
           </button>
-          <button
-            onClick={handleStarClick}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-            title="Star"
-          >
-            <Star
-              className={clsx(
-                'w-5 h-5',
-                selectedEmail.is_starred
-                  ? 'fill-yellow-400 text-yellow-400'
-                  : 'text-gray-500'
-              )}
-            />
+          <button onClick={handleStarClick} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Star">
+            <Star className={clsx('w-5 h-5', selectedEmail.is_starred ? 'fill-yellow-400 text-yellow-400' : 'text-gray-500')} />
           </button>
-          <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Archive">
-            <Archive className="w-5 h-5 text-gray-500" />
-          </button>
-          <button
-            onClick={handleDelete}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-            title="Delete"
-          >
+          <button onClick={handleDelete} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700" title="Delete">
             <Trash2 className="w-5 h-5 text-gray-500" />
           </button>
-          <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
-            <MoreHorizontal className="w-5 h-5 text-gray-500" />
-          </button>
         </div>
       </div>
 
-      {/* Email content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {/* From/To info */}
-        <div className="flex items-start gap-4 mb-6">
-          <div className="w-12 h-12 bg-primary-100 dark:bg-primary-900 rounded-full flex items-center justify-center flex-shrink-0">
-            <span className="text-primary-600 dark:text-primary-400 font-medium text-lg">
-              {(selectedEmail.from_name || selectedEmail.from_address)[0].toUpperCase()}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium text-gray-900 dark:text-white">
-                {selectedEmail.from_name || selectedEmail.from_address}
-              </span>
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                &lt;{selectedEmail.from_address}&gt;
-              </span>
-            </div>
-            <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              To: {selectedEmail.to_addresses?.map((t: any) => t.name || t.address).join(', ')}
-            </div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              {format(new Date(selectedEmail.date), 'PPpp')}
-            </div>
-          </div>
+      {/* Thread messages */}
+      <div className="flex-1 overflow-y-auto">
+        {emails.map((email: any, idx: number) => {
+          const isLast = idx === emails.length - 1
+          const isCollapsed = collapsedIds.has(email.id)
 
-          {/* Security indicators */}
-          {selectedEmail.security && (
-            <div className="flex items-center gap-2">
-              {selectedEmail.security.dkim === 'pass' &&
-               selectedEmail.security.spf === 'pass' ? (
-                <div className="flex items-center gap-1 text-green-600" title="Verified sender">
-                  <ShieldCheck className="w-5 h-5" />
+          return (
+            <div key={email.id} className={clsx('border-b border-gray-100 dark:border-gray-700', isLast && 'border-none')}>
+              {/* Message header — always visible */}
+              <button
+                onClick={() => !isLast && toggleCollapse(email.id)}
+                className={clsx(
+                  'w-full flex items-center gap-4 px-6 py-4 text-left',
+                  !isLast && 'hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer',
+                  isLast && 'cursor-default'
+                )}
+              >
+                <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center flex-shrink-0 text-indigo-600 dark:text-indigo-300 font-semibold text-sm">
+                  {(email.from_name || email.from_address || '?')[0].toUpperCase()}
                 </div>
-              ) : (
-                <div className="flex items-center gap-1 text-yellow-600" title="Unverified">
-                  <ShieldAlert className="w-5 h-5" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-900 dark:text-white text-sm">
+                      {email.from_name || email.from_address}
+                    </span>
+                    {email.security?.dkim === 'pass' && email.security?.spf === 'pass' ? (
+                      <ShieldCheck className="w-3.5 h-3.5 text-green-500" aria-label="Verified" />
+                    ) : null}
+                    {email.has_attachments && <Paperclip className="w-3.5 h-3.5 text-gray-400" />}
+                  </div>
+                  {isCollapsed && (
+                    <p className="text-xs text-gray-500 truncate">{email.snippet}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className="text-xs text-gray-400">{format(new Date(email.date), 'PPp')}</span>
+                  {!isLast && (isCollapsed
+                    ? <ChevronDown className="w-4 h-4 text-gray-400" />
+                    : <ChevronUp className="w-4 h-4 text-gray-400" />)
+                  }
+                </div>
+              </button>
+
+              {/* Message body — shown when not collapsed */}
+              {!isCollapsed && (
+                <div className="px-6 pb-6">
+                  {/* To line */}
+                  <p className="text-xs text-gray-400 mb-4">
+                    To: {email.to_addresses?.map((t: any) => t.name || t.address).join(', ')}
+                  </p>
+
+                  {/* Attachments */}
+                  {email.attachments && email.attachments.length > 0 && (
+                    <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg flex flex-wrap gap-2">
+                      {email.attachments.map((att: any) => (
+                        <button
+                          key={att.id}
+                          onClick={() => handleDownloadAttachment(att)}
+                          className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm"
+                        >
+                          <Download className="w-3.5 h-3.5 text-gray-500" />
+                          <span className="max-w-[140px] truncate text-gray-700 dark:text-gray-300">{att.filename}</span>
+                          <span className="text-xs text-gray-400">({formatFileSize(att.size_bytes)})</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Body */}
+                  <div className="email-content prose prose-sm dark:prose-invert max-w-none">
+                    {email.body_html ? (
+                      <div dangerouslySetInnerHTML={{ __html: email.body_html }} />
+                    ) : (
+                      <pre className="whitespace-pre-wrap font-sans text-gray-700 dark:text-gray-300 text-sm">
+                        {email.body_text || 'No content'}
+                      </pre>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
-          )}
-        </div>
-
-        {/* Attachments */}
-        {selectedEmail.attachments && selectedEmail.attachments.length > 0 && (
-          <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <div className="flex items-center gap-2 mb-3">
-              <Paperclip className="w-4 h-4 text-gray-500" />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {selectedEmail.attachments.length} attachment{selectedEmail.attachments.length > 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {selectedEmail.attachments.map((attachment: any) => (
-                <button
-                  key={attachment.id}
-                  onClick={() => handleDownloadAttachment(attachment)}
-                  className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                >
-                  <Download className="w-4 h-4 text-gray-500" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300 max-w-[150px] truncate">
-                    {attachment.filename}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    ({formatFileSize(attachment.size_bytes)})
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Email body */}
-        <div className="email-content">
-          {selectedEmail.body_html ? (
-            <div dangerouslySetInnerHTML={{ __html: selectedEmail.body_html }} />
-          ) : (
-            <pre className="whitespace-pre-wrap font-sans text-gray-700 dark:text-gray-300">
-              {selectedEmail.body_text || 'No content'}
-            </pre>
-          )}
-        </div>
+          )
+        })}
       </div>
 
-      {/* Quick reply */}
-      <div className="border-t border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Write a quick reply..."
-            className="flex-1 input-field"
-          />
-          <button className="btn-primary">Send</button>
-        </div>
-      </div>
+      {/* Reply / Forward modals */}
+      {composeMode && (
+        <ComposeModal
+          isOpen={!!composeMode}
+          onClose={() => setComposeMode(null)}
+          replyTo={composeMode === 'reply' || composeMode === 'replyAll' ? selectedEmail : undefined}
+          forward={composeMode === 'forward' ? selectedEmail : undefined}
+        />
+      )}
     </div>
   )
 }

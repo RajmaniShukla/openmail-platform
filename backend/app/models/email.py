@@ -251,10 +251,10 @@ class Attachment(Base):
         primary_key=True,
         default=uuid.uuid4
     )
-    email_id: Mapped[uuid.UUID] = mapped_column(
+    email_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("emails.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=True   # null until the email record is created (pre-upload flow)
     )
     
     filename: Mapped[str] = mapped_column(String(255), nullable=False)

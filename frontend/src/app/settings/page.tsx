@@ -427,7 +427,7 @@ function SecuritySettings() {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
               />
               {errors.current_password && (
-                <p className="text-sm text-red-500 mt-1">{errors.current_password.message}</p>
+                <p className="text-sm text-red-500 mt-1">{errors.current_password.message as string}</p>
               )}
             </div>
             <div>
@@ -440,7 +440,7 @@ function SecuritySettings() {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
               />
               {errors.new_password && (
-                <p className="text-sm text-red-500 mt-1">{errors.new_password.message}</p>
+                <p className="text-sm text-red-500 mt-1">{errors.new_password.message as string}</p>
               )}
             </div>
             <div>
@@ -453,7 +453,7 @@ function SecuritySettings() {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
               />
               {errors.confirm_password && (
-                <p className="text-sm text-red-500 mt-1">{errors.confirm_password.message}</p>
+                <p className="text-sm text-red-500 mt-1">{errors.confirm_password.message as string}</p>
               )}
             </div>
             <button

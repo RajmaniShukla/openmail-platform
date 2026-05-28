@@ -46,8 +46,8 @@ export default function RegisterPage() {
       await authApi.register({
         email: data.email,
         password: data.password,
-        first_name: data.firstName,
-        last_name: data.lastName,
+        first_name: data.firstName ?? '',
+        last_name: data.lastName ?? '',
       })
       setSuccess(true)
       toast.success('Account created! Please check your email to verify.')

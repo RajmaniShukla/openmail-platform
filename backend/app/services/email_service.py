@@ -377,40 +377,225 @@ class IMAPSyncService:
     def __init__(self, db: AsyncSession, mailbox: Mailbox):
         self.db = db
         self.mailbox = mailbox
-    
+
     async def sync_folder(self, folder_name: str = "INBOX") -> int:
-        """Sync emails from an IMAP folder"""
-        # This would connect to the IMAP server and sync emails
-        # Implementation depends on the specific IMAP library used
-        pass
-    
+        """Sync emails from an IMAP folder via aioimaplib."""
+        from app.core.config import settings
+        import email as email_lib
+        from email.policy import default as email_policy
+
+        imap_host = settings.POSTFIX_HOST  # Dovecot runs on same host
+        imap_port = 993
+
+        imap = aioimaplib.IMAP4_SSL(host=imap_host, port=imap_port)
+        await imap.wait_hello_from_server()
+
+        login_resp = await imap.login(self.mailbox.email, self.mailbox.password or "")
+        if login_resp.result != "OK":
+            return 0
+
+        await imap.select(folder_name)
+
+        # Fetch UIDs of all messages
+        _, uid_data = await imap.uid("search", "ALL")
+        if not uid_data or not uid_data[0]:
+            await imap.logout()
+            return 0
+
+        uids = uid_data[0].split()
+        if not uids:
+            await imap.logout()
+            return 0
+
+        # Only sync the most recent 100 messages to avoid overload
+        uids_to_sync = uids[-100:]
+
+        # Get existing message IDs from DB to avoid duplicates
+        existing = await self.db.execute(
+            select(Email.message_id).where(Email.mailbox_id == self.mailbox.id)
+        )
+        existing_ids: set = {row[0] for row in existing.fetchall() if row[0]}
+
+        # Determine target folder
+        folder_obj = await self._get_folder_by_type(self.mailbox.id, folder_name.lower() if folder_name.lower() in {"inbox", "sent", "drafts", "spam", "trash"} else "inbox")
+
+        synced = 0
+        for uid in uids_to_sync:
+            try:
+                _, msg_data = await imap.uid("fetch", uid, "(RFC822)")
+                if not msg_data or len(msg_data) < 2:
+                    continue
+
+                raw_bytes = msg_data[1]
+                if isinstance(raw_bytes, (bytes, bytearray)):
+                    raw_str = raw_bytes.decode("utf-8", errors="replace")
+                else:
+                    continue
+
+                msg = email_lib.message_from_string(raw_str, policy=email_policy)
+                message_id = msg.get("Message-ID", "").strip()
+
+                if message_id and message_id in existing_ids:
+                    continue  # Already have this one
+
+                # Extract body parts
+                body_text, body_html = "", ""
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        ct = part.get_content_type()
+                        if ct == "text/plain" and not body_text:
+                            body_text = part.get_content()
+                        elif ct == "text/html" and not body_html:
+                            body_html = part.get_content()
+                else:
+                    if msg.get_content_type() == "text/html":
+                        body_html = msg.get_content()
+                    else:
+                        body_text = msg.get_content()
+
+                # Parse addresses
+                from_header = msg.get("From", "")
+                from_addr = from_header
+                from_name = None
+                if "<" in from_header:
+                    parts = from_header.split("<")
+                    from_name = parts[0].strip().strip('"')
+                    from_addr = parts[1].rstrip(">")
+
+                to_raw = msg.get("To", "")
+                to_addresses = [{"address": a.strip(), "name": None} for a in to_raw.split(",") if a.strip()]
+
+                import uuid as uuid_lib
+                from datetime import timezone
+                date_header = msg.get("Date")
+                try:
+                    from email.utils import parsedate_to_datetime
+                    mail_date = parsedate_to_datetime(date_header) if date_header else datetime.utcnow()
+                    if mail_date.tzinfo is not None:
+                        mail_date = mail_date.astimezone(timezone.utc).replace(tzinfo=None)
+                except Exception:
+                    mail_date = datetime.utcnow()
+
+                email_obj = Email(
+                    id=uuid_lib.uuid4(),
+                    mailbox_id=self.mailbox.id,
+                    folder_id=folder_obj.id if folder_obj else None,
+                    message_id=message_id or str(uuid_lib.uuid4()),
+                    thread_id=uuid_lib.uuid4(),
+                    in_reply_to=msg.get("In-Reply-To"),
+                    from_address=from_addr,
+                    from_name=from_name,
+                    to_addresses=to_addresses,
+                    subject=msg.get("Subject", ""),
+                    body_text=body_text,
+                    body_html=body_html,
+                    snippet=body_text[:200] if body_text else body_html[:200] if body_html else "",
+                    date=mail_date,
+                    is_read=False,
+                    is_starred=False,
+                    is_draft=False,
+                    is_sent=folder_name.lower() == "sent",
+                )
+                self.db.add(email_obj)
+                existing_ids.add(message_id)
+                synced += 1
+
+            except Exception:
+                continue  # Skip malformed messages
+
+        if synced > 0:
+            await self.db.commit()
+
+        await imap.logout()
+        return synced
+
     async def full_sync(self) -> Dict[str, int]:
-        """Perform a full sync of all folders"""
-        pass
+        """Perform a full sync of inbox, sent, drafts, spam, trash."""
+        folders_to_sync = [
+            ("INBOX", "inbox"),
+            ("Sent", "sent"),
+            ("Drafts", "drafts"),
+            ("Spam", "spam"),
+            ("Trash", "trash"),
+        ]
+        results: Dict[str, int] = {}
+        for imap_folder, _ in folders_to_sync:
+            try:
+                count = await self.sync_folder(imap_folder)
+                results[imap_folder] = count
+            except Exception:
+                results[imap_folder] = 0
+        return results
 
 
 class SpamFilterService:
-    """Service for spam filtering"""
-    
+    """Service for spam filtering via SpamAssassin spamd protocol."""
+
     @staticmethod
     async def check_spam(email_content: str, headers: Dict[str, str]) -> float:
         """
-        Check if an email is spam
-        Returns a spam score from 0.0 to 1.0
+        Check email against SpamAssassin via the SPAMC protocol.
+        Returns a normalized spam score 0.0–1.0 (threshold is settings.SPAM_THRESHOLD).
+        Falls back to heuristic check if SpamAssassin is unavailable.
         """
-        # In production, this would integrate with SpamAssassin or similar
+        import asyncio
+        from app.core.config import settings
+
+        # --- Try SpamAssassin first ---
+        try:
+            raw = email_content.encode("utf-8", errors="replace")
+            request = (
+                f"REPORT SPAMC/1.5\r\n"
+                f"Content-length: {len(raw)}\r\n"
+                f"User: openmail\r\n"
+                f"\r\n"
+            ).encode() + raw
+
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(settings.SPAMASSASSIN_HOST, settings.SPAMASSASSIN_PORT),
+                timeout=5.0,
+            )
+            writer.write(request)
+            await writer.drain()
+            writer.write_eof()
+
+            response = await asyncio.wait_for(reader.read(65536), timeout=10.0)
+            writer.close()
+            await writer.wait_closed()
+
+            response_str = response.decode("utf-8", errors="replace")
+            # Parse score line: e.g. "Spam: True ; 8.3 / 5.0"
+            for line in response_str.splitlines():
+                if line.lower().startswith("spam:"):
+                    parts = line.split(";")
+                    if len(parts) >= 2:
+                        score_part = parts[1].strip().split("/")
+                        raw_score = float(score_part[0].strip())
+                        threshold = float(score_part[1].strip()) if len(score_part) > 1 else settings.SPAM_THRESHOLD
+                        # Normalize to 0.0–1.0
+                        return min(max(raw_score / max(threshold * 2, 1), 0.0), 1.0)
+        except Exception:
+            pass  # SpamAssassin unavailable — fall through to heuristics
+
+        # --- Heuristic fallback ---
         spam_score = 0.0
-        
-        # Simple heuristics for demo
-        spam_keywords = ["viagra", "lottery", "winner", "prize", "nigerian", "prince"]
+        spam_keywords = ["viagra", "lottery", "winner", "prize", "nigerian", "prince",
+                         "click here", "act now", "free money", "earn $", "make money fast"]
         content_lower = email_content.lower()
-        
         for keyword in spam_keywords:
             if keyword in content_lower:
-                spam_score += 0.2
-        
-        # Check for suspicious headers
-        if "X-Spam-Flag" in headers and headers["X-Spam-Flag"].upper() == "YES":
+                spam_score += 0.15
+
+        # Header signals
+        if headers.get("X-Spam-Flag", "").upper() == "YES":
             spam_score = 1.0
-        
+        if headers.get("X-Spam-Status", "").lower().startswith("yes"):
+            spam_score = max(spam_score, 0.9)
+
+        # Missing standard headers is a mild signal
+        if not headers.get("Date"):
+            spam_score += 0.1
+        if not headers.get("Message-ID"):
+            spam_score += 0.1
+
         return min(spam_score, 1.0)

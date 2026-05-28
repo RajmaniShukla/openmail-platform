@@ -48,6 +48,10 @@ app.add_middleware(
 # Include API router
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
+# WebSocket (mounted at /ws — outside API prefix so clients connect directly)
+from app.api.v1.endpoints.websocket import router as ws_router
+app.include_router(ws_router)
+
 
 @app.get("/")
 async def root():

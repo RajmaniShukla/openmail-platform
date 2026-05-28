@@ -234,9 +234,71 @@ def process_incoming_email(raw_email: str, recipient: str) -> Dict[str, Any]:
 
 @celery_app.task
 def process_spam_queue() -> Dict[str, Any]:
-    """Process emails in spam queue and apply filters"""
-    # Implementation for spam processing
-    return {"status": "success", "processed": 0}
+    """
+    Re-evaluate recent unscored inbox emails against SpamAssassin.
+    Emails above threshold are moved to spam folder.
+    """
+    from app.db.database import AsyncSessionLocal
+    from app.models.email import Email, Folder
+    from app.services.email_service import SpamFilterService
+    from sqlalchemy import and_
+    from datetime import timedelta
+
+    async def _process():
+        async with AsyncSessionLocal() as db:
+            # Fetch inbox emails received in the last hour with no spam score yet
+            cutoff = datetime.utcnow() - timedelta(hours=1)
+            result = await db.execute(
+                select(Email)
+                .join(Folder)
+                .where(
+                    and_(
+                        Folder.type == "inbox",
+                        Email.spam_score == 0.0,
+                        Email.received_at >= cutoff,
+                        Email.is_spam == False,
+                    )
+                )
+                .limit(200)
+            )
+            emails = result.scalars().all()
+
+            processed = 0
+            moved_to_spam = 0
+
+            for email in emails:
+                try:
+                    content = email.body_text or email.body_html or ""
+                    headers = dict(email.headers or {})
+                    score = await SpamFilterService.check_spam(content, headers)
+                    email.spam_score = score
+
+                    # Threshold: score >= 0.8 (normalised) → move to spam
+                    if score >= 0.8:
+                        spam_folder_result = await db.execute(
+                            select(Folder).where(
+                                and_(
+                                    Folder.mailbox_id == email.mailbox_id,
+                                    Folder.type == "spam",
+                                )
+                            )
+                        )
+                        spam_folder = spam_folder_result.scalar_one_or_none()
+                        if spam_folder:
+                            email.folder_id = spam_folder.id
+                            email.is_spam = True
+                            moved_to_spam += 1
+
+                    processed += 1
+                except Exception:
+                    continue
+
+            if processed:
+                await db.commit()
+
+            return {"status": "success", "processed": processed, "moved_to_spam": moved_to_spam}
+
+    return asyncio.run(_process())
 
 
 # ============== Cleanup Tasks ==============
@@ -356,9 +418,81 @@ def update_search_index() -> Dict[str, Any]:
 
 @celery_app.task
 def reindex_mailbox(mailbox_id: str) -> Dict[str, Any]:
-    """Reindex all emails for a mailbox"""
-    # Full reindex implementation
-    return {"status": "success", "indexed": 0}
+    """Reindex all emails for a mailbox into Elasticsearch."""
+    from app.db.database import AsyncSessionLocal
+    from app.models.email import Email
+    from elasticsearch import AsyncElasticsearch
+    from app.core.config import settings
+
+    async def _reindex():
+        es = AsyncElasticsearch([settings.ELASTICSEARCH_URL])
+        try:
+            # Ensure index exists with correct mapping
+            index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}_emails"
+            if not await es.indices.exists(index=index_name):
+                await es.indices.create(
+                    index=index_name,
+                    body={
+                        "mappings": {
+                            "properties": {
+                                "mailbox_id": {"type": "keyword"},
+                                "folder_id": {"type": "keyword"},
+                                "from_address": {"type": "keyword"},
+                                "from_name": {"type": "text"},
+                                "to_addresses": {"type": "keyword"},
+                                "subject": {"type": "text", "analyzer": "standard"},
+                                "body_text": {"type": "text", "analyzer": "standard"},
+                                "date": {"type": "date"},
+                                "is_read": {"type": "boolean"},
+                                "is_starred": {"type": "boolean"},
+                                "is_spam": {"type": "boolean"},
+                                "is_trash": {"type": "boolean"},
+                            }
+                        }
+                    },
+                )
+
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(Email).where(Email.mailbox_id == mailbox_id)
+                )
+                emails = result.scalars().all()
+
+                # Bulk index in batches of 100
+                batch = []
+                indexed = 0
+                for email in emails:
+                    batch.append({"index": {"_index": index_name, "_id": str(email.id)}})
+                    batch.append({
+                        "mailbox_id": str(email.mailbox_id),
+                        "folder_id": str(email.folder_id) if email.folder_id else None,
+                        "from_address": email.from_address,
+                        "from_name": email.from_name,
+                        "to_addresses": [
+                            a.get("address") if isinstance(a, dict) else str(a)
+                            for a in (email.to_addresses or [])
+                        ],
+                        "subject": email.subject,
+                        "body_text": email.body_text,
+                        "snippet": email.snippet,
+                        "date": email.date.isoformat() if email.date else None,
+                        "is_read": email.is_read,
+                        "is_starred": email.is_starred,
+                        "is_spam": email.is_spam,
+                        "is_trash": email.is_trash,
+                    })
+                    indexed += 1
+                    if len(batch) >= 200:  # 100 pairs
+                        await es.bulk(body=batch)
+                        batch = []
+
+                if batch:
+                    await es.bulk(body=batch)
+            return {"status": "success", "indexed": indexed}
+        finally:
+            await es.close()
+
+    return asyncio.run(_reindex())
 
 
 # ============== Domain Tasks ==============
@@ -420,9 +554,76 @@ def check_domain_dns() -> Dict[str, Any]:
 
 @celery_app.task
 def verify_domain(domain_id: str) -> Dict[str, Any]:
-    """Verify a specific domain's DNS records"""
-    # Similar to check_domain_dns but for a single domain
-    return {"status": "success", "verified": False}
+    """Verify a specific domain's DNS records and update DB."""
+    import dns.resolver
+    from uuid import UUID
+    from app.db.database import AsyncSessionLocal
+    from app.models.domain import Domain
+    from app.core.config import settings
+
+    async def _verify():
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Domain).where(Domain.id == UUID(domain_id))
+            )
+            domain = result.scalar_one_or_none()
+            if not domain:
+                return {"status": "error", "message": "Domain not found"}
+
+            checks = {"mx": False, "spf": False, "dkim": False, "dmarc": False}
+
+            try:
+                # MX
+                try:
+                    mx = dns.resolver.resolve(domain.name, "MX")
+                    checks["mx"] = any(
+                        settings.MAIL_SERVER_HOSTNAME in str(r.exchange)
+                        for r in mx
+                    )
+                except Exception:
+                    pass
+
+                # SPF
+                try:
+                    txt = dns.resolver.resolve(domain.name, "TXT")
+                    checks["spf"] = any(
+                        "v=spf1" in rdata.to_text() and settings.MAIL_SERVER_HOSTNAME in rdata.to_text()
+                        for rdata in txt
+                    )
+                except Exception:
+                    pass
+
+                # DKIM
+                try:
+                    dkim_name = f"{domain.dkim_selector}._domainkey.{domain.name}"
+                    dkim_txt = dns.resolver.resolve(dkim_name, "TXT")
+                    checks["dkim"] = any("v=DKIM1" in rdata.to_text() for rdata in dkim_txt)
+                except Exception:
+                    pass
+
+                # DMARC
+                try:
+                    dmarc_txt = dns.resolver.resolve(f"_dmarc.{domain.name}", "TXT")
+                    checks["dmarc"] = any("v=DMARC1" in rdata.to_text() for rdata in dmarc_txt)
+                except Exception:
+                    pass
+
+            except Exception:
+                pass
+
+            is_verified = checks["mx"] and checks["spf"]
+            domain.is_verified = is_verified
+            if hasattr(domain, "mx_verified"):
+                domain.mx_verified = checks["mx"]
+            if hasattr(domain, "spf_verified"):
+                domain.spf_verified = checks["spf"]
+            if hasattr(domain, "dkim_verified"):
+                domain.dkim_verified = checks["dkim"]
+
+            await db.commit()
+            return {"status": "success", "verified": is_verified, "checks": checks}
+
+    return asyncio.run(_verify())
 
 
 # ============== Statistics Tasks ==============
@@ -491,13 +692,141 @@ def send_notification(
     notification_type: str,
     data: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Send a notification to a user"""
-    # Implementation for push notifications, email notifications, etc.
-    return {"status": "success", "sent": True}
+    """
+    Deliver an in-app notification to a user via Redis pub/sub.
+    The WebSocket handler subscribes to the `notifications:{user_id}` channel.
+    """
+    import json
+    from app.db.database import get_redis_sync
+
+    try:
+        redis = get_redis_sync()
+        payload = json.dumps({
+            "type": notification_type,
+            "data": data,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+        # Publish to per-user channel — WebSocket handler picks this up
+        redis.publish(f"notifications:{user_id}", payload)
+        # Also push to a persistent list (last 50) for reconnect replay
+        redis.lpush(f"notif_history:{user_id}", payload)
+        redis.ltrim(f"notif_history:{user_id}", 0, 49)
+        return {"status": "success", "sent": True}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
 
 
 @celery_app.task
 def send_email_digest(user_id: str) -> Dict[str, Any]:
-    """Send daily/weekly email digest to a user"""
-    # Implementation for email digest
-    return {"status": "success", "sent": True}
+    """
+    Build and send a daily email digest to the user.
+    Summarises unread inbox emails from the last 24h.
+    """
+    from app.db.database import AsyncSessionLocal
+    from app.models.user import User
+    from app.models.domain import Mailbox
+    from app.models.email import Email, Folder
+    from app.services.email_service import EmailService
+    from sqlalchemy import and_
+    from datetime import timedelta
+    from uuid import UUID
+
+    async def _digest():
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, UUID(user_id))
+            if not user or not user.is_active:
+                return {"status": "skip", "reason": "user not found or inactive"}
+
+            # Get user's primary mailbox
+            result = await db.execute(
+                select(Mailbox).where(
+                    and_(Mailbox.user_id == user.id, Mailbox.is_primary == True)
+                )
+            )
+            mailbox = result.scalar_one_or_none()
+            if not mailbox:
+                return {"status": "skip", "reason": "no primary mailbox"}
+
+            # Fetch unread inbox emails from the last 24h
+            cutoff = datetime.utcnow() - timedelta(hours=24)
+            inbox_result = await db.execute(
+                select(Folder).where(
+                    and_(Folder.mailbox_id == mailbox.id, Folder.type == "inbox")
+                )
+            )
+            inbox = inbox_result.scalar_one_or_none()
+            if not inbox:
+                return {"status": "skip", "reason": "no inbox folder"}
+
+            emails_result = await db.execute(
+                select(Email)
+                .where(
+                    and_(
+                        Email.folder_id == inbox.id,
+                        Email.is_read == False,
+                        Email.received_at >= cutoff,
+                    )
+                )
+                .order_by(Email.date.desc())
+                .limit(20)
+            )
+            unread = emails_result.scalars().all()
+
+            if not unread:
+                return {"status": "skip", "reason": "no unread emails"}
+
+            # Build digest HTML
+            rows = "".join(
+                f"""
+                <tr>
+                  <td style='padding:8px;border-bottom:1px solid #eee;font-weight:bold'>
+                    {e.from_name or e.from_address}
+                  </td>
+                  <td style='padding:8px;border-bottom:1px solid #eee'>{e.subject or '(no subject)'}</td>
+                  <td style='padding:8px;border-bottom:1px solid #eee;color:#888;font-size:12px'>
+                    {e.date.strftime('%H:%M')}
+                  </td>
+                </tr>
+                """
+                for e in unread
+            )
+            body_html = f"""
+            <html><body style='font-family:sans-serif;max-width:600px;margin:auto'>
+              <h2 style='color:#4f46e5'>Your Daily Email Digest</h2>
+              <p>You have <strong>{len(unread)}</strong> unread message(s) from the last 24 hours.</p>
+              <table width='100%' style='border-collapse:collapse'>
+                <thead>
+                  <tr style='background:#f5f5f5'>
+                    <th style='padding:8px;text-align:left'>From</th>
+                    <th style='padding:8px;text-align:left'>Subject</th>
+                    <th style='padding:8px;text-align:left'>Time</th>
+                  </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+              </table>
+              <p style='color:#888;font-size:12px;margin-top:24px'>
+                This digest was sent to {user.email}. Manage your notification settings in OpenMail.
+              </p>
+            </body></html>
+            """
+            body_text = (
+                f"Your Daily Digest\n\nYou have {len(unread)} unread message(s) from the last 24 hours.\n\n"
+                + "\n".join(
+                    f"- {e.from_name or e.from_address}: {e.subject or '(no subject)'}"
+                    for e in unread
+                )
+            )
+
+            # Send digest via the mailbox SMTP
+            svc = EmailService(db)
+            await svc.send_email(
+                mailbox=mailbox,
+                to_addresses=[user.email],
+                subject=f"Your Daily Digest — {len(unread)} unread messages",
+                body_html=body_html,
+                body_text=body_text,
+            )
+
+            return {"status": "success", "sent": True, "emails_summarised": len(unread)}
+
+    return asyncio.run(_digest())

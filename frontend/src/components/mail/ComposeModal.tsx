@@ -41,7 +41,7 @@ export default function ComposeModal({ isOpen, onClose, replyTo, forward }: Comp
   const [showCc, setShowCc] = useState(false)
   const [showBcc, setShowBcc] = useState(false)
 
-  const { addEmail } = useEmailStore()
+  const { addEmail } = useEmailStore() // optimistic update after send
 
   const editor = useEditor({
     extensions: [
@@ -151,10 +151,25 @@ export default function ComposeModal({ isOpen, onClose, replyTo, forward }: Comp
   }
 
   const saveDraft = async () => {
+    const toValue = (document.querySelector('input[name="to"]') as HTMLInputElement)?.value || ''
+    const subjectValue = (document.querySelector('input[name="subject"]') as HTMLInputElement)?.value || ''
+    const bodyHtml = editor?.getHTML() || ''
+    const bodyText = editor?.getText() || ''
+
+    // Only save if there is meaningful content
+    if (!bodyText.trim() && !toValue.trim() && !subjectValue.trim()) return
+
     try {
-      // Save as draft logic
+      await emailApi.saveDraft({
+        to: toValue ? toValue.split(',').map((e) => e.trim()).filter(Boolean) : [],
+        subject: subjectValue,
+        body_html: bodyHtml,
+        body_text: bodyText,
+        is_draft: true,
+        ...(replyTo ? { in_reply_to: replyTo.message_id, thread_id: replyTo.thread_id } : {}),
+      })
       toast.success('Draft saved')
-    } catch (error) {
+    } catch {
       toast.error('Failed to save draft')
     }
   }
