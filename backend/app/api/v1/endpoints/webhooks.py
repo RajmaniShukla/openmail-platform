@@ -13,7 +13,7 @@ import json
 from app.core.config import settings
 from app.services.celery_tasks import process_incoming_email
 
-router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+router = APIRouter(tags=["webhooks"])
 
 
 class IncomingEmailWebhook(BaseModel):

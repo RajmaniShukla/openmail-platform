@@ -7,9 +7,9 @@ from typing import Optional, List
 
 from sqlalchemy import (
     Column, String, Boolean, DateTime, Integer, Text,
-    ForeignKey, BigInteger, Float, Index, Table
+    ForeignKey, BigInteger, Float, Index, Table, JSON
 )
-from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSON
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -150,7 +150,7 @@ class Email(Base):
     # Threading
     thread_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     in_reply_to: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    references: Mapped[Optional[list]] = mapped_column(ARRAY(String), nullable=True)
+    references: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     
     # Envelope
     from_address: Mapped[str] = mapped_column(String(255), nullable=False)

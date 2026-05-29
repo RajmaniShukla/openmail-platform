@@ -79,7 +79,7 @@ def sync_mailbox(self, mailbox_id: str) -> Dict[str, Any]:
     try:
         from app.db.database import get_db_sync
         from app.services.email_service import IMAPSyncService
-        from app.models.user import Mailbox
+        from app.models.domain import Mailbox
         
         # Get database session
         db = get_db_sync()
@@ -102,7 +102,7 @@ def sync_mailbox(self, mailbox_id: str) -> Dict[str, Any]:
 def sync_all_mailboxes() -> Dict[str, Any]:
     """Sync all active mailboxes"""
     from app.db.database import get_db_sync
-    from app.models.user import Mailbox
+    from app.models.domain import Mailbox
     
     db = get_db_sync()
     mailboxes = db.query(Mailbox).filter(Mailbox.is_active == True).all()
@@ -134,7 +134,7 @@ def send_email_task(
     try:
         from app.db.database import get_db_sync, AsyncSessionLocal
         from app.services.email_service import EmailService
-        from app.models.user import Mailbox
+        from app.models.domain import Mailbox
         
         # Run async code
         async def _send():
@@ -169,7 +169,7 @@ def process_incoming_email(raw_email: str, recipient: str) -> Dict[str, Any]:
     from email.policy import default as email_policy
     from app.db.database import AsyncSessionLocal
     from app.services.email_service import EmailService, SpamFilterService
-    from app.models.user import Mailbox
+    from app.models.domain import Mailbox
     from app.models.email import Folder
     
     async def _process():

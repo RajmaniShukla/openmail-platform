@@ -10,11 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
 from app.db.database import get_db
-from app.models.user import User, Mailbox
+from app.models.user import User
+from app.models.domain import Mailbox
 from app.models.email import Email, Folder
-from app.core.security import get_current_user
+from app.api.v1.endpoints.auth import get_current_user
 
-router = APIRouter(prefix="/stats", tags=["statistics"])
+router = APIRouter(tags=["statistics"])
 
 
 @router.get("/overview")

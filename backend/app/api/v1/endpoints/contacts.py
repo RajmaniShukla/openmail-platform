@@ -11,11 +11,11 @@ from sqlalchemy import select, update, delete, func, or_
 from app.db.database import get_db
 from app.models.user import User
 from app.models.contact import Contact, ContactGroup
-from app.core.security import get_current_user
+from app.api.v1.endpoints.auth import get_current_user
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 
-router = APIRouter(prefix="/contacts", tags=["contacts"])
+router = APIRouter(tags=["contacts"])
 
 
 # Pydantic schemas

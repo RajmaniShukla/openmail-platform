@@ -7,9 +7,9 @@ from typing import Optional, List
 
 from sqlalchemy import (
     Column, String, Boolean, DateTime, Integer, Text,
-    ForeignKey, BigInteger, Index
+    ForeignKey, BigInteger, Index, JSON
 )
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -172,7 +172,7 @@ class Mailbox(Base):
     )
     
     # Forwarding
-    forward_to: Mapped[Optional[list]] = mapped_column(ARRAY(String), nullable=True)
+    forward_to: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     forward_keep_copy: Mapped[bool] = mapped_column(Boolean, default=True)
     
     # Timestamps

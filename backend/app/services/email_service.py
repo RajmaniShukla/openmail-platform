@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_
 from sqlalchemy.orm import selectinload
 
-from app.models.email import Email, Attachment, Folder, Label, EmailLabel
-from app.models.user import Mailbox
+from app.models.email import Email, Attachment, Folder, Label, email_labels
+from app.models.domain import Mailbox
 from app.core.config import settings
 from app.db.database import get_redis
 
@@ -56,7 +56,7 @@ class EmailService:
             query = query.where(Email.folder_id == folder_id)
         
         if label_id:
-            query = query.join(EmailLabel).where(EmailLabel.label_id == label_id)
+            query = query.join(email_labels, email_labels.c.email_id == Email.id).where(email_labels.c.label_id == label_id)
         
         if is_read is not None:
             query = query.where(Email.is_read == is_read)

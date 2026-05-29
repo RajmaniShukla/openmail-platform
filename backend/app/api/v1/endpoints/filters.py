@@ -10,12 +10,13 @@ from sqlalchemy import select, update, delete, and_
 from pydantic import BaseModel
 
 from app.db.database import get_db
-from app.models.user import User, Mailbox
+from app.models.user import User
+from app.models.domain import Mailbox
 from app.models.email import EmailFilter
-from app.core.security import get_current_user
+from app.api.v1.endpoints.auth import get_current_user
 from datetime import datetime
 
-router = APIRouter(prefix="/filters", tags=["filters"])
+router = APIRouter(tags=["filters"])
 
 
 # Pydantic schemas

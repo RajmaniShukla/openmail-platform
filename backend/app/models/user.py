@@ -10,7 +10,7 @@ from sqlalchemy import (
     Column, String, Boolean, DateTime, Integer, Text,
     ForeignKey, Index, Enum as SQLEnum, JSON
 )
-from sqlalchemy.dialects.postgresql import UUID, INET, ARRAY
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -96,6 +96,16 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan"
     )
+    contacts: Mapped[List["Contact"]] = relationship(
+        "Contact",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    contact_groups: Mapped[List["ContactGroup"]] = relationship(
+        "ContactGroup",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
 
     @property
     def full_name(self) -> str:
@@ -132,7 +142,7 @@ class Session(Base):
     refresh_token_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
     device_info: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    ip_address: Mapped[Optional[str]] = mapped_column(INET, nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     expires_at: Mapped[datetime] = mapped_column(
